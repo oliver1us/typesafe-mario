@@ -235,8 +235,10 @@ bad model ID.
 Prefer an explicit backend with `--base-url`: this retains that backend's model
 and credential variable. `--backend auto --base-url ...` instead selects a custom
 transport with default model `jev-latest` and no automatically selected key.
-There is no chat-protocol adapter. The heuristic ignores backend/model/URL flags
-and never calls a provider.
+There is no chat-protocol adapter. For AI without OpenRouter, choose `direct`
+with `TYPESAFE_API_KEY`, or `ollama` with an explicitly compatible server. For
+**no APIs at all**, use `--policy heuristic`; it ignores backend/model/URL and
+credential settings and never calls a provider.
 
 ## Conservative mode: opt-in, not a survival promise
 
@@ -268,13 +270,18 @@ trained improvement to Jev, and cannot guarantee level completion.
 ## Docker Compose workflows
 
 Optional configuration: copy `.env.example` to `.env` **only if you do not already
-have one**, fill in your provider key locally, and keep it untracked. Compose
-loads `.env`; the local Python CLI does not. Shell variables override Compose's
-`.env` values. The build context excludes `.env`, artifacts, and common caches.
+have one**, add a provider key only for a remote AI backend, and keep it untracked.
+Compose loads `.env`; the local Python CLI does not. Shell variables override
+Compose's `.env` values. The build context excludes `.env`, artifacts, and common caches.
 The template opts into `SHOW_TRAJECTORIES=true`; without that setting, Compose
 and the CLI default to hidden paths. If you persist `MARIO_UID`/`MARIO_GID` in an
 existing `.env`, use your actual output-directory owner IDs, not necessarily the
 template's `1000` values. Rebuild after changing them.
+
+**Offline `.env` setup:** set `POLICY=heuristic` and leave API keys blank.
+`BACKEND=openrouter` can remain: provider settings are ignored by the heuristic.
+`BACKEND=none` is not valid; leaving `BACKEND` blank defaults to `openrouter`,
+not offline mode.
 
 ```bash
 # Offline dashboard with the guard enabled.

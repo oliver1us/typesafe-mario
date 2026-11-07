@@ -45,9 +45,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./artifacts:/app/artifacts
+      - mario_artifacts:/app/artifacts
     ports:
       - "${NOVNC_BIND_ADDRESS:-127.0.0.1}:${NOVNC_PORT:-6080}:6080"
     # Mount a custom ROM only if you have a legally dumped copy.
     # volumes:
     #   - ./my-roms/super-mario-bros.nes:/usr/local/lib/python3.13/site-packages/gym_super_mario_bros/_roms/super-mario-bros.nes:ro
+volumes:
+  mario_artifacts:
