@@ -8,11 +8,12 @@ version = "0.1.0"
 description = "A direct-control TypeSafe/Jev agent for Super Mario Bros."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-  "typesafe-sdk",
-]
+dependencies = []
 
 [project.optional-dependencies]
+typesafe = [
+  "typesafe-sdk",
+]
 mario = [
   "gym-super-mario-bros>=9.1.0",
   "gymnasium",

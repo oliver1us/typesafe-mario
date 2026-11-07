@@ -53,6 +53,7 @@ class LiveDashboard:
         self,
         config: DashboardConfig | None = None,
         theme: DashboardTheme | None = None,
+        safety_mode: str = "off",
     ) -> None:
         try:
             import pygame
@@ -64,6 +65,7 @@ class LiveDashboard:
         self.pg = pygame
         self.config = config or DashboardConfig()
         self.theme = theme or DashboardTheme()
+        self.safety_mode = safety_mode
         pygame.init()
         pygame.display.set_caption("TypeSafe plays Super Mario Bros.")
         self.screen = pygame.display.set_mode((self.config.width, self.config.height))
@@ -191,6 +193,13 @@ class LiveDashboard:
         game_h = c.height - game_y - margin
 
         self._text("TypeSafe plays Mario", self.font_title, t.text, margin, 18)
+        self._text(
+            f"Safety: {self.safety_mode}",
+            self.font_label,
+            t.warning if self.safety_mode == "conservative" else t.muted,
+            360,
+            23,
+        )
         if run_ended:
             status = "Run ended"
         else:
@@ -219,7 +228,7 @@ class LiveDashboard:
         x = panel_x + 18
         width = c.panel_width - 42
         y = game_y
-        self._text("World 1–1", self.font_label, t.muted, x, y)
+        self._text(f"World {snapshot.world}–{snapshot.stage}", self.font_label, t.muted, x, y)
         self._text(f"Decision {decision_index:04d}", self.font_small, t.muted, x + width - 100, y)
         y += 27
 
@@ -230,9 +239,16 @@ class LiveDashboard:
         y += 42
         if decision is None:
             description = "Jev is evaluating the next bounded controller action."
+        elif decision.safety_reason:
+            proposed = (decision.proposed_action or decision.action).value
+            description = f"Guard: {proposed} -> {decision.action.value}"
         else:
             description = ACTION_DESCRIPTIONS[decision.action]
+        while len(description) > 1 and self.font_small.size(description)[0] > width:
+            description = description[:-2] + "…"
         self._text(description, self.font_small, t.muted, x, y)
+        if decision and decision.safety_reason:
+            self._text(decision.safety_reason, self.font_small, t.warning, x, y + 16)
         y += 32
         self._rule(x, y, width)
         y += 18
@@ -241,7 +257,7 @@ class LiveDashboard:
         latency = decision.latency_ms if decision else 0.0
         metric_width = width // 3
         metrics = (
-            ("Confidence", f"{confidence * 100:.0f}%"),
+            ("Model confidence", f"{confidence * 100:.0f}%"),
             ("Latency", f"{latency:.0f} ms"),
             ("Reward", f"{episode_reward:+.1f}"),
         )
@@ -250,7 +266,7 @@ class LiveDashboard:
             self._text(label, self.font_small, t.muted, metric_x, y)
             self._text(value, self.font_body, t.text, metric_x, y + 19)
         y += 58
-        self._text("Controller probabilities", self.font_label, t.text, x, y)
+        self._text("Model probabilities (not survival odds)", self.font_label, t.text, x, y)
         y += 24
 
         probabilities = decision.probabilities if decision else {}

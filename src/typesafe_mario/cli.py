@@ -7,7 +7,29 @@ from pathlib import Path
 
 from .policy import HeuristicPolicy, TypeSafePolicy
 from .runner import run_episode
+from .safety import SafetyConfig
 from .state import MarioStateParser
+
+
+def _positive_int(value: str) -> int:
+    result = int(value)
+    if result < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return result
+
+
+def _nonnegative_int(value: str) -> int:
+    result = int(value)
+    if result < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return result
+
+
+def _fraction(value: str) -> float:
+    result = float(value)
+    if not 0 <= result <= 1:
+        raise argparse.ArgumentTypeError("use a fraction from 0 to 1 (80% = 0.8)")
+    return result
 
 
 def _demo_ram() -> bytearray:
@@ -63,13 +85,50 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--env", default="SuperMarioBros-1-1-v0")
     play.add_argument(
         "--frames-per-decision",
-        type=int,
+        type=_positive_int,
         default=8,
         help="Minimum macro duration in emulator frames",
     )
-    play.add_argument("--max-decisions", type=int, default=2000)
+    play.add_argument("--max-decisions", type=_positive_int, default=2000)
     play.add_argument("--seed", type=int, default=123)
     play.add_argument("--policy", choices=("typesafe", "heuristic"), default="typesafe")
+    play.add_argument(
+        "--backend",
+        choices=("auto", "direct", "openrouter", "ollama"),
+        default="auto",
+        help="Jev transport. 'auto' picks from whichever API key is set.",
+    )
+    play.add_argument(
+        "--model",
+        help="Override the model id (e.g. typesafe/jev-1.13 on OpenRouter).",
+    )
+    play.add_argument(
+        "--base-url", help="Override the full System One endpoint URL (not a chat endpoint)."
+    )
+    play.add_argument(
+        "--safety-mode",
+        choices=("off", "conservative"),
+        default="off",
+        help="Optional local safety guard; off preserves the original controller",
+    )
+    play.add_argument(
+        "--min-confidence",
+        type=_fraction,
+        default=0.8,
+        help="Below this confidence, walk rather than run on the ground (default: 0.8)",
+    )
+    play.add_argument(
+        "--danger-threshold",
+        type=_fraction,
+        default=0.5,
+        help="Normalized danger threshold for slowing down (default: 0.5)",
+    )
+    play.add_argument(
+        "--safety-margin-frames",
+        type=_nonnegative_int,
+        default=6,
+        help="Extra enemy-reaction margin in frames (default: 6, about 100 ms at 60 fps)",
+    )
     play.add_argument(
         "--display",
         choices=("dashboard", "game", "none"),
@@ -90,7 +149,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "state-demo":
         return state_demo()
     if args.command == "play":
-        policy = TypeSafePolicy() if args.policy == "typesafe" else HeuristicPolicy()
+        if args.policy == "typesafe":
+            policy = TypeSafePolicy(args.backend, model=args.model, base_url=args.base_url)
+            print(f"Jev backend: {policy.describe()}")
+        else:
+            policy = HeuristicPolicy()
         log_path = run_episode(
             env_id=args.env,
             policy=policy,
@@ -100,6 +163,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifacts_dir=args.artifacts_dir,
             display=args.display,
             screenshot_path=args.screenshot,
+            safety_config=SafetyConfig(
+                mode=args.safety_mode,
+                min_confidence=args.min_confidence,
+                danger_threshold=args.danger_threshold,
+                margin_frames=args.safety_margin_frames,
+            ),
         )
         print(f"Run log: {log_path.resolve()}")
         return 0

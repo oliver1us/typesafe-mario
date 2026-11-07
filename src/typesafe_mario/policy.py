@@ -17,24 +17,67 @@ class Decision:
     latency_ms: float
     jump_needed_probability: float | None = None
     danger_score: float | None = None
+    proposed_action: Action | None = None
+    safety_reason: str | None = None
+    safety_mode: str = "off"
 
 
 class Policy(Protocol):
     def choose(self, snapshot: MarioSnapshot, actions: Sequence[Action]) -> Decision: ...
 
 
+class _Question:
+    """Stand-in for the SDK's Choice/Noul/Score when typesafe-sdk is absent.
+
+    The SDK derives the wire `type` from the class it was constructed as
+    (Choice -> "choice"). This fallback is bound to one primitive per
+    instance in TypeSafePolicy.__init__, so the call sites in choose()
+    stay byte-for-byte identical to upstream.
+    """
+
+    __slots__ = ("criteria", "instructions", "type")
+
+    def __init__(self, instructions, criteria=None, *, type="choice"):
+        self.instructions = instructions
+        self.criteria = criteria
+        self.type = type
+
+    def __repr__(self):
+        return f"_Question(type={self.type!r}, criteria={self.criteria!r})"
+
+
 class TypeSafePolicy:
-    def __init__(self) -> None:
+    """Jev-backed action policy.
+
+    Transport is pluggable. Pass backend="openrouter" or backend="ollama" to
+    run the identical policy against another provider; the questions,
+    criteria and thresholds below are unchanged.
+    """
+
+    def __init__(self, backend="auto", **backend_kwargs):
         try:
-            from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
-        except ImportError as exc:
-            raise RuntimeError(
-                "typesafe-sdk is not installed. Install the project before using Jev."
-            ) from exc
-        self._Choice = Choice
-        self._Noul = Noul
-        self._Score = Score
-        self._client = TypeSafeClient()
+            from typesafe_sdk import Choice, Noul, Score
+
+            self._Choice, self._Noul, self._Score = Choice, Noul, Score
+        except ImportError:
+
+            def _choice(instructions, criteria=None):
+                return _Question(instructions, criteria, type="choice")
+
+            def _noul(instructions, criteria=None):
+                return _Question(instructions, criteria, type="noul")
+
+            def _score(instructions, criteria=None):
+                return _Question(instructions, criteria, type="score")
+
+            self._Choice, self._Noul, self._Score = _choice, _noul, _score
+
+        from .jev_backend import MultiBackendClient
+
+        self._client = MultiBackendClient(backend, **backend_kwargs)
+
+    def describe(self):
+        return getattr(self._client, "describe", lambda: "")()
 
     def close(self) -> None:
         close = getattr(self._client, "close", None)
@@ -58,7 +101,10 @@ class TypeSafePolicy:
                 instructions={
                     "question": "Which controller macro should Mario commit to next?",
                     "goal": "Advance toward the stage flag while avoiding death.",
-                    "timing": "The selected action is held for at least 8 emulator frames.",
+                    "timing": (
+                        f"The selected action is held for at least "
+                        f"{snapshot.decision_horizon_frames} emulator frames."
+                    ),
                     "geometry": (
                         "Use `terrain.observation_reliability`. While airborne, prefer "
                         "`terrain.last_grounded_preview` over low-reliability current geometry. "
