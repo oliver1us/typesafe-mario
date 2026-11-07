@@ -80,6 +80,9 @@ class MarioSnapshot:
     last_grounded_gap_width_tiles: int = 0
     last_grounded_obstacle_distance_tiles: int | None = None
     last_grounded_obstacle_height_tiles: int = 0
+    # Display-only coordinates; deliberately excluded from the model-facing JSON.
+    screen_x: int | None = None
+    screen_y: int | None = None
 
     def navigation_features(self) -> dict[str, Any]:
         rows = self.local_grid
@@ -318,6 +321,8 @@ class MarioSnapshot:
                 "previous_reward": self.previous_reward,
                 "horizontal_motion": self.direction,
                 "vertical_motion": self.vertical_motion,
+                "screen_x": self.screen_x,
+                "screen_y": self.screen_y,
             },
             "visible_enemies": [enemy.to_state() for enemy in self.enemies],
             "local_grid": {
@@ -537,6 +542,21 @@ class MarioStateParser:
             last_grounded_gap_width_tiles=self._last_grounded_gap_width,
             last_grounded_obstacle_distance_tiles=self._last_grounded_obstacle_distance,
             last_grounded_obstacle_height_tiles=self._last_grounded_obstacle_height,
+            screen_x=(
+                self._integer(info, "left_x_pos")
+                if info.get("left_x_pos") is not None
+                else (
+                    (self._ram_byte(ram, 0x0086) - self._ram_byte(ram, 0x071C)) % 256
+                    if ram is not None
+                    else None
+                )
+            ),
+            screen_y=(
+                screen_y
+                if self._integer(info, "y_viewport", self._ram_byte(ram, 0x00B5, 1)) == 1
+                and (info.get("y_pixel") is not None or ram is not None)
+                else None
+            ),
         )
         navigation = snapshot.navigation_features()
         if grounded:

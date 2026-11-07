@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import pairwise
+from math import hypot
 from pathlib import Path
 from typing import Any
 
 from .actions import ACTION_DESCRIPTIONS, Action
+from .display import draw_rgb_frame
 from .policy import Decision
 from .state import MarioSnapshot
+from .trajectories import ACTION_COLORS, HORIZON_FRAMES, estimate_trajectories, sprite_geometry
 
 Color = tuple[int, int, int]
 
@@ -46,6 +50,36 @@ def clamp01(value: float | None) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
+def dashed_segments(
+    points: tuple[tuple[float, float], ...], dash: float = 9, gap: float = 6
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Dash a polyline continuously, rather than restarting at every vertex."""
+    if dash <= 0 or gap <= 0:
+        raise ValueError("dash and gap must be positive")
+    result = []
+    phase = 0.0
+    for start, end in pairwise(points):
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = hypot(dx, dy)
+        offset = 0.0
+        while offset < length:
+            drawing = phase < dash
+            step = min((dash if drawing else dash + gap) - phase, length - offset)
+            if drawing and step > 0:
+                result.append(
+                    (
+                        (start[0] + dx * offset / length, start[1] + dy * offset / length),
+                        (
+                            start[0] + dx * (offset + step) / length,
+                            start[1] + dy * (offset + step) / length,
+                        ),
+                    )
+                )
+            offset += step
+            phase = (phase + step) % (dash + gap)
+    return result
+
+
 class LiveDashboard:
     """One-window game feed and TypeSafe telemetry display."""
 
@@ -54,6 +88,7 @@ class LiveDashboard:
         config: DashboardConfig | None = None,
         theme: DashboardTheme | None = None,
         safety_mode: str = "off",
+        show_trajectories: bool = False,
     ) -> None:
         try:
             import pygame
@@ -66,6 +101,7 @@ class LiveDashboard:
         self.config = config or DashboardConfig()
         self.theme = theme or DashboardTheme()
         self.safety_mode = safety_mode
+        self.show_trajectories = show_trajectories
         pygame.init()
         pygame.display.set_caption("TypeSafe plays Super Mario Bros.")
         self.screen = pygame.display.set_mode((self.config.width, self.config.height))
@@ -120,36 +156,115 @@ class LiveDashboard:
         if fill:
             self.pg.draw.rect(self.screen, bar_color, (x, bar_y, fill, 7), border_radius=3)
 
-    def _draw_game(self, frame: Any, x: int, y: int, width: int, height: int) -> None:
+    def _draw_game(
+        self, frame: Any, x: int, y: int, width: int, height: int
+    ) -> tuple[Any, tuple[int, int]] | None:
         self.pg.draw.rect(self.screen, self.theme.surface, (x, y, width, height), border_radius=4)
         if frame is None:
             self._text(
                 "Waiting for emulator frame", self.font_body, self.theme.muted, x + 28, y + 28
             )
             return
-        try:
-            import numpy as np
-        except ImportError as exc:
-            raise RuntimeError("The dashboard needs numpy.") from exc
-
-        pixels = np.asarray(frame)
-        if pixels.ndim != 3 or pixels.shape[2] < 3:
-            raise ValueError(f"Expected an RGB frame, received shape {pixels.shape!r}")
-        pixels = pixels[:, :, :3]
-        source = self.pg.surfarray.make_surface(pixels.swapaxes(0, 1))
-        source_ratio = source.get_width() / source.get_height()
-        target_ratio = width / height
-        if source_ratio > target_ratio:
-            target_width = width
-            target_height = round(width / source_ratio)
-        else:
-            target_height = height
-            target_width = round(height * source_ratio)
-        scaled = self.pg.transform.scale(source, (target_width, target_height))
-        target_x = x + (width - target_width) // 2
-        target_y = y + (height - target_height) // 2
-        self.screen.blit(scaled, (target_x, target_y))
+        viewport, source_size = draw_rgb_frame(
+            self.pg, self.screen, frame, self.pg.Rect(x, y, width, height)
+        )
         self.pg.draw.rect(self.screen, self.theme.line, (x, y, width, height), 1, border_radius=4)
+        return viewport, source_size
+
+    def _draw_trajectories(
+        self,
+        viewport: Any,
+        source_size: tuple[int, int],
+        snapshot: MarioSnapshot,
+        decision: Decision | None,
+        waiting: bool,
+        legend: Any,
+    ) -> None:
+        pg = self.pg
+        paths = estimate_trajectories(snapshot)
+        available = (
+            paths
+            and snapshot.screen_x is not None
+            and snapshot.screen_y is not None
+            and 0 <= snapshot.screen_x < source_size[0]
+            and 0 <= snapshot.screen_y < source_size[1]
+        )
+        layer = pg.Surface(viewport.size, pg.SRCALPHA)
+        selected = decision.action if decision else None
+        probabilities = decision.probabilities if decision else {}
+        proposed = (
+            (decision.proposed_action or decision.action) if decision and probabilities else None
+        )
+        if available:
+            scale_x = viewport.width / source_size[0]
+            scale_y = viewport.height / source_size[1]
+            sprite_offset, sprite_height = sprite_geometry(snapshot)
+            for path in sorted(paths, key=lambda path: path.action == selected):
+                color = ACTION_COLORS[path.action]
+                weight = clamp01(probabilities.get(path.action.value))
+                alpha = 255 if path.action == selected else round(125 + 105 * weight)
+                width = 3 if path.action == selected else 2
+                points = tuple(
+                    (
+                        (snapshot.screen_x + 8 + px) * scale_x,
+                        (snapshot.screen_y + sprite_offset + sprite_height / 2 + py) * scale_y,
+                    )
+                    for px, py in path.points
+                )
+                for start, end in dashed_segments(points):
+                    pg.draw.line(layer, (*color, alpha), start, end, width)
+                endpoint = tuple(round(value) for value in points[-1])
+                if path.end_reason in {"solid", "enemy"}:
+                    ex, ey = endpoint
+                    pg.draw.line(layer, (*color, alpha), (ex - 4, ey - 4), (ex + 4, ey + 4), 2)
+                    pg.draw.line(layer, (*color, alpha), (ex - 4, ey + 4), (ex + 4, ey - 4), 2)
+                else:
+                    pg.draw.circle(layer, (*color, alpha), endpoint, 4, 1)
+                if path.action == proposed:
+                    pg.draw.circle(layer, (255, 255, 255, 235), endpoint, 7, 1)
+        self.screen.blit(layer, viewport.topleft)
+
+        # Keep the legend below the game: Mario normally stands near the image bottom.
+        pg.draw.rect(self.screen, self.theme.surface, legend, border_radius=4)
+        title = f"Estimated paths · {HORIZON_FRAMES / 60:.2f} s · F hides"
+        if not available:
+            title = "Estimated paths unavailable for current state · F hides"
+        self._text(title, self.font_label, self.theme.text, legend.x + 10, legend.y + 5)
+        self._text(
+            (
+                "Latest decision weights, NOT survival odds"
+                if probabilities
+                else "No completed decision weights yet"
+            )
+            + (" · response pending" if waiting else ""),
+            self.font_small,
+            self.theme.muted,
+            legend.x + 10,
+            legend.y + 26,
+        )
+        for index, action in enumerate(Action):
+            x = legend.x + 10 + (index % 4) * (legend.width // 4)
+            y = legend.y + 49 + (index // 4) * 22
+            pg.draw.circle(self.screen, ACTION_COLORS[action], (x + 4, y + 8), 4)
+            value = probabilities.get(action.value)
+            percent = "—" if value is None else f"{clamp01(value) * 100:.0f}%"
+            marker = " [M]" if action == proposed else ""
+            if decision and decision.safety_reason and action == selected:
+                marker += " [G]"
+            self._text(
+                f"{action.value.replace('_', ' ')} {percent}{marker}",
+                self.font_small,
+                self.theme.text,
+                x + 14,
+                y,
+            )
+        self._text(
+            "M: model · G: guard · ×: possible contact · ○: horizon/unknown · coarse physics/tiles",
+            self.font_small,
+            self.theme.muted,
+            legend.x + 10,
+            legend.y + 94,
+        )
 
     def _restart_rect(self) -> Any:
         return self.pg.Rect(self.config.width - 144, 13, 120, 36)
@@ -174,6 +289,8 @@ class LiveDashboard:
                 return DashboardCommand.QUIT
             if event.type == self.pg.KEYDOWN and event.key == self.pg.K_r:
                 command = DashboardCommand.RESTART
+            if event.type == self.pg.KEYDOWN and event.key == self.pg.K_f:
+                self.show_trajectories = not self.show_trajectories
             if (
                 event.type == self.pg.MOUSEBUTTONDOWN
                 and event.button == 1
@@ -223,7 +340,12 @@ class LiveDashboard:
             restart_rect.centery - label_height // 2,
         )
         self._rule(margin, header_h, c.width - margin * 2)
-        self._draw_game(frame, game_x, game_y, game_w, game_h)
+        image_height = game_h - 120 if self.show_trajectories else game_h
+        game_view = self._draw_game(frame, game_x, game_y, game_w, image_height)
+        if self.show_trajectories and game_view is not None:
+            viewport, source_size = game_view
+            legend = self.pg.Rect(game_x, game_y + game_h - 115, game_w, 115)
+            self._draw_trajectories(viewport, source_size, snapshot, decision, waiting, legend)
 
         x = panel_x + 18
         width = c.panel_width - 42
@@ -280,6 +402,7 @@ class LiveDashboard:
                 y=y,
                 width=width,
                 selected=action.value == selected_action,
+                color=ACTION_COLORS[action] if self.show_trajectories else None,
             )
             y += 36
 
@@ -306,9 +429,7 @@ class LiveDashboard:
             self._text(line, self.font_mono, t.muted, x, y)
             y += 20
 
-        footer = (
-            "Click Restart or press R to play again" if run_ended else "R restarts · Esc or Q quits"
-        )
+        footer = "R restarts · F toggles paths · Esc or Q quits"
         self._text(footer, self.font_small, t.muted, x, c.height - 28)
         self.pg.display.flip()
         self.clock.tick(c.fps)

@@ -154,6 +154,25 @@ class MarioStateParserTests(unittest.TestCase):
         self.assertEqual(snapshot.stalled_steps, 0)
         self.assertIsNone(snapshot.previous_action)
 
+    def test_display_coordinates_follow_camera_without_changing_model_state(self) -> None:
+        snapshot = MarioStateParser().parse(self.base_info(x_pos=500, left_x_pos=112))
+        self.assertEqual((snapshot.screen_x, snapshot.screen_y), (112, 80))
+        self.assertNotIn("screen_x", snapshot.to_state()["player"])
+        self.assertEqual(snapshot.to_debug_state()["raw"]["screen_x"], 112)
+        above_screen = MarioStateParser().parse(self.base_info(left_x_pos=112, y_viewport=0))
+        self.assertIsNone(above_screen.screen_y)
+
+    def test_display_coordinates_use_ram_fallback_and_do_not_guess_without_it(self) -> None:
+        ram = bytearray(0x0800)
+        ram[0x0086], ram[0x071C], ram[0x03B8] = 20, 164, 192
+        ram[0x00B5] = 1
+        snapshot = MarioStateParser().parse({}, ram)
+        self.assertEqual((snapshot.screen_x, snapshot.screen_y), (112, 192))
+        ram[0x00B5] = 2
+        self.assertIsNone(MarioStateParser().parse({}, ram).screen_y)
+        snapshot = MarioStateParser().parse({})
+        self.assertEqual((snapshot.screen_x, snapshot.screen_y), (None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

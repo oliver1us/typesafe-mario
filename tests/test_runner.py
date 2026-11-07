@@ -7,7 +7,7 @@ import unittest
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typesafe_mario.actions import Action
 from typesafe_mario.dashboard import DashboardCommand
@@ -23,6 +23,83 @@ from typesafe_mario.state import MarioStateParser
 
 
 class RunnerTests(unittest.TestCase):
+    def test_game_uses_large_rgb_viewer_and_closing_it_stops_the_loop(self) -> None:
+        env = MagicMock(ram=None, env=None)
+        env.reset.return_value = ("first-frame", {"x_pos": 40})
+        env.step.return_value = ("next-frame", 1.0, False, False, {"x_pos": 41})
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("typesafe_mario.runner.create_mario_env", return_value=env) as create,
+            patch("typesafe_mario.runner.GameWindow") as viewer,
+            patch("typesafe_mario.runner.LiveDashboard") as dashboard,
+        ):
+            viewer.return_value.draw.side_effect = [True, False]
+            path = run_episode(
+                env_id="SuperMarioBros-1-1-v0",
+                policy=HeuristicPolicy(),
+                frames_per_decision=8,
+                max_decisions=100,
+                seed=123,
+                artifacts_dir=Path(directory),
+                display="game",
+                game_width=1280,
+                game_height=720,
+            )
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+        create.assert_called_once_with("SuperMarioBros-1-1-v0", render_mode="rgb_array")
+        viewer.assert_called_once_with(width=1280, height=720)
+        dashboard.assert_not_called()
+        env.render.assert_not_called()
+        env.step.assert_called_once()
+        viewer.return_value.close.assert_called_once()
+        env.close.assert_called_once()
+        self.assertEqual(records[-1]["event"], "episode_summary")
+        self.assertEqual(records[-1]["decisions"], 1)
+
+    def test_viewer_initialization_failure_still_closes_environment(self) -> None:
+        env = MagicMock(ram=None, env=None)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("typesafe_mario.runner.create_mario_env", return_value=env),
+            patch("typesafe_mario.runner.GameWindow", side_effect=RuntimeError("no display")),
+            self.assertRaisesRegex(RuntimeError, "no display"),
+        ):
+            run_episode(
+                env_id="test",
+                policy=HeuristicPolicy(),
+                frames_per_decision=8,
+                max_decisions=1,
+                seed=123,
+                artifacts_dir=Path(directory),
+                display="game",
+            )
+        env.close.assert_called_once()
+
+    def test_realtime_draw_uses_post_step_state(self) -> None:
+        env = MagicMock(ram=None, env=None)
+        env.step.return_value = ("new-frame", 0, False, False, {"x_pos": 41})
+        dashboard = MagicMock()
+        dashboard.draw.return_value = DashboardCommand.QUIT
+        parser = MarioStateParser()
+        with patch("typesafe_mario.runner.ThreadPoolExecutor") as executor:
+            executor.return_value.__enter__.return_value.submit.return_value = Future()
+            _run_realtime_dashboard(
+                env=env,
+                dashboard=dashboard,
+                policy=HeuristicPolicy(),
+                parser=parser,
+                frame="old-frame",
+                info={"x_pos": 40},
+                log=io.StringIO(),
+                frames_per_decision=8,
+                max_decisions=10,
+                screenshot_path=None,
+                guard=SafetyGuard(),
+            )
+        frame, snapshot, _ = dashboard.draw.call_args.args
+        self.assertEqual(frame, "new-frame")
+        self.assertEqual((snapshot.x, snapshot.dx), (41, 1))
+
     def test_realtime_guard_intervenes_while_model_future_is_pending(self) -> None:
         class PendingExecutor:
             def __init__(self, **kwargs):

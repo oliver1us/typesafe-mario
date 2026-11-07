@@ -14,6 +14,7 @@ services:
       - BASE_URL=${BASE_URL:-}
       - POLICY=${POLICY:-typesafe}
       - GAME_DISPLAY=${GAME_DISPLAY:-dashboard}
+      - SHOW_TRAJECTORIES=${SHOW_TRAJECTORIES:-false}
       - SAFETY_MODE=${SAFETY_MODE:-off}
       - MIN_CONFIDENCE=${MIN_CONFIDENCE:-0.8}
       - DANGER_THRESHOLD=${DANGER_THRESHOLD:-0.5}

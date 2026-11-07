@@ -10,6 +10,8 @@ args=(play
     --max-decisions "${MAX_DECISIONS:-2000}"
     --seed "${SEED:-123}"
     --display "${GAME_DISPLAY:-dashboard}"
+    --game-width "${DISPLAY_WIDTH:-1440}"
+    --game-height "${DISPLAY_HEIGHT:-810}"
     --safety-mode "${SAFETY_MODE:-off}"
     --min-confidence "${MIN_CONFIDENCE:-0.8}"
     --danger-threshold "${DANGER_THRESHOLD:-0.5}"
@@ -18,6 +20,11 @@ args=(play
 )
 if [ -n "${MODEL:-}" ]; then args+=(--model "$MODEL"); fi
 if [ -n "${BASE_URL:-}" ]; then args+=(--base-url "$BASE_URL"); fi
+case "${SHOW_TRAJECTORIES:-false}" in
+    true|1|yes|on) args+=(--trajectories) ;;
+    false|0|no|off) args+=(--no-trajectories) ;;
+    *) echo "SHOW_TRAJECTORIES must be true/false (or 1/0, yes/no, on/off)" >&2; exit 2 ;;
+esac
 args+=("$@")
 
 # Honor the final --display override, including --display=none, before starting X.

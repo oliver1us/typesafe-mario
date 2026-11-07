@@ -65,6 +65,22 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(args.policy, "heuristic")
         self.assertEqual(args.safety_mode, "conservative")
 
+    def test_trajectory_environment_default_and_cli_override(self) -> None:
+        for value in ("true", "1", "yes", "on"):
+            argv = self.run_entrypoint("--display=none", SHOW_TRAJECTORIES=value)
+            self.assertTrue(build_parser().parse_args(argv).trajectories)
+        argv = self.run_entrypoint("--display=none", "--no-trajectories", SHOW_TRAJECTORIES="true")
+        self.assertFalse(build_parser().parse_args(argv).trajectories)
+        argv = self.run_entrypoint("--display=none", "--trajectories", SHOW_TRAJECTORIES="false")
+        self.assertTrue(build_parser().parse_args(argv).trajectories)
+
+    def test_virtual_desktop_dimensions_set_game_size_but_cli_wins(self) -> None:
+        argv = self.run_entrypoint("--display=none", DISPLAY_WIDTH="1280", DISPLAY_HEIGHT="720")
+        args = build_parser().parse_args(argv)
+        self.assertEqual((args.game_width, args.game_height), (1280, 720))
+        argv = self.run_entrypoint("--display=none", "--game-width=960", DISPLAY_WIDTH="1280")
+        self.assertEqual(build_parser().parse_args(argv).game_width, 960)
+
 
 if __name__ == "__main__":
     unittest.main()

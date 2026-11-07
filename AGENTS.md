@@ -15,9 +15,11 @@ src/typesafe_mario/
   cli.py           # argparse entry point and validation
   runner.py        # synchronous/realtime loops, jump edges, JSONL events and summaries
   state.py         # SMB1 RAM -> structured model state and debug views
-  dashboard.py     # pygame telemetry, guard action/reason vs original model probabilities
+  dashboard.py     # pygame telemetry + opt-in action paths; original model probabilities
+  trajectories.py  # view-only coarse macro estimates; no emulator rollouts/provider calls
+  display.py       # shared RGB scaling + large resizable synchronous game viewer
   actions.py       # controller macros
-tests/             # state, backend, CLI, dashboard, safety, runner, and entrypoint tests
+tests/             # state, backend, CLI, display/paths, dashboard, safety, runner, entrypoint
 Dockerfile         # Python 3.13 + emulator + TigerVNC + noVNC
 compose.yml        # service config, host port 6081 -> container 6080, artifacts bind mount
 docker-entrypoint.sh
@@ -92,11 +94,33 @@ as live-provider verification.
   model confidence/probabilities. The controller separately manages jump-button
   release/repress edges. Logs are not a full per-frame controller-input trace.
 - `dashboard` is asynchronous and targets 60 fps; the world advances during API
-  calls. `game` explicitly renders the synchronous loop, while `none` runs it
-  without windows. Game/headless pause the world during API requests. Do not
-  equate headless outcomes with real-time dashboard results.
-- Settings are startup-only. **Restart**/`R` resets an episode, not safety,
-  policy, or display flags. Changing them requires a new command/container.
+  calls. `game` draws RGB frames through a resizable pygame viewer at a target
+  60 fps, not the native emulator human viewer. It defaults to 1440×810;
+  `--game-width`/`--game-height` accept positive initial dimensions, unused in
+  other modes. Scaling is nearest-neighbor, aspect-preserving, and letterboxed.
+  Esc/Q/close exits gracefully with an episode summary. `none` has no window.
+  Game/headless retain synchronous decisions and pause during API requests;
+  game window events are handled between calls. Do not equate headless outcomes
+  with real-time dashboard results.
+- Dashboard paths default off (`--trajectories`/`--no-trajectories`). **F** toggles
+  visibility even without the startup flag, and that state survives **Restart**/`R`.
+  This view-only exception changes no policy/controller behavior or provider
+  calls. `game`/`none` ignore paths; dashboard screenshots include them if visible.
+  Policy, safety, display mode, and initial dimensions still require a new
+  command/container; episode restart does not reload settings.
+- Paths use the fresh displayed RAM/camera snapshot, while weights are from the
+  latest completed decision and can be older/pending. Seven colors match bars
+  while visible; selected macro is bold, M/white endpoint ring marks the original
+  proposal, G marks the guard override. Never rewrite original probabilities or
+  call them survival odds. The legend belongs below the image, not over Mario.
+- Trajectories hold each macro once for up to 45 frames (0.75 s at 60 fps), with
+  simple physics, coarse tiles, and constant enemy horizontal velocity. They can
+  overlap/truncate; airborne geometry is unreliable. Contact/unknown/horizon
+  markers are illustrative, not survival guarantees. No Jev internal futures,
+  emulator clones/rollouts, sequence tree, stomps, enemy AI, re-jumps, controller
+  edges, or future guard changes are modeled. Do not draw paths without usable
+  geometry/visible position or for parsed dead/cleared states. `screen_x` and
+  `screen_y` are display/debug-only, excluded from model-facing JSON.
 - Compare matching policies, seeds, environments, cadence, decision budgets, and
   display modes. Use `episode_summary` (`best_progress`, `dead`, `stage_clear`,
   config) and intervention events. A single seed/offline heuristic comparison is
@@ -114,6 +138,9 @@ docker compose build mario
 
 # Free offline dashboard, guard enabled:
 docker compose run --rm --service-ports mario --policy heuristic --safety-mode conservative
+
+# Optional view-only paths (run instead of the previous container on that port):
+docker compose run --rm --service-ports mario --policy heuristic --trajectories
 
 # Free headless smoke test, no X/VNC/noVNC processes:
 docker compose run --rm mario --policy heuristic --display none --max-decisions 25
@@ -134,6 +161,12 @@ no TLS, public default password, Compose publishes on all host interfaces.
 - `GAME_DISPLAY` selects `dashboard`/`game`/`none`; X11 `DISPLAY` is unrelated.
   `none` skips graphical servers entirely. `compose up` still publishes its port
   but no HTTP server runs in this mode.
+- `SHOW_TRAJECTORIES=false` controls initial dashboard visibility; accepted values
+  are lowercase `true/1/yes/on` and `false/0/no/off`. Invalid values fail startup;
+  trailing `--trajectories`/`--no-trajectories` override valid environment defaults.
+- `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` default to 1440/810 and set both the TigerVNC
+  desktop and initial plain game window size, not the fixed dashboard layout.
+  Trailing `--game-width`/`--game-height` override only the window, not the desktop.
 - Trailing CLI flags override entrypoint environment defaults. Pass play flags
   directly after the service/image; do not duplicate `typesafe-mario play`.
 - Compose persists logs/PNGs with `./artifacts:/app/artifacts`. Keep that mount

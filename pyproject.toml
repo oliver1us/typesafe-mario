@@ -30,7 +30,7 @@ dev = [
 typesafe-mario = "typesafe_mario.cli:main"
 
 [project.urls]
-Repository = "https://github.com/fhshaik/typesafe-mario"
+Repository = "https://github.com/fhshahttps://github.com/fhshaik/typesafe-marioik/typesafe-mario"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/typesafe_mario"]

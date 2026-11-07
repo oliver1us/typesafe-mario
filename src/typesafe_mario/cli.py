@@ -137,6 +137,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     play.add_argument("--artifacts-dir", type=Path, default=Path("artifacts"))
     play.add_argument(
+        "--game-width", type=_positive_int, default=1440, help="Initial plain game window width"
+    )
+    play.add_argument(
+        "--game-height", type=_positive_int, default=810, help="Initial plain game window height"
+    )
+    play.add_argument(
+        "--trajectories",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Show approximate colored action paths in the dashboard (F toggles visibility)",
+    )
+    play.add_argument(
         "--screenshot",
         type=Path,
         help="Save the first populated dashboard frame as a PNG",
@@ -163,6 +175,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifacts_dir=args.artifacts_dir,
             display=args.display,
             screenshot_path=args.screenshot,
+            show_trajectories=args.trajectories,
+            game_width=args.game_width,
+            game_height=args.game_height,
             safety_config=SafetyConfig(
                 mode=args.safety_mode,
                 min_confidence=args.min_confidence,

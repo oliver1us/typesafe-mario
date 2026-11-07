@@ -9,6 +9,7 @@ from typing import Any
 
 from .actions import ACTION_TO_INDEX, JUMP_ACTIONS, JUMP_RELEASE_ACTION, Action
 from .dashboard import DashboardCommand, LiveDashboard
+from .display import GameWindow
 from .policy import Decision, Policy
 from .safety import SafetyConfig, SafetyGuard
 from .state import MarioStateParser
@@ -175,18 +176,10 @@ def _run_realtime_dashboard(
     interventions = 0
     last_override = None
     summary_recorded = False
+    snapshot = parser.parse(info, _unwrap_ram(env), previous_response_delay_frames=0)
 
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="typesafe-jev") as executor:
         while True:
-            snapshot = parser.parse(
-                info,
-                _unwrap_ram(env),
-                previous_action=previous_action.value if previous_action else None,
-                previous_reward=previous_reward,
-                previous_latency_ms=previous_latency_ms,
-                previous_response_delay_frames=previous_response_delay_frames,
-            )
-
             if pending is not None and pending.done():
                 active_decision = pending.result()
                 previous_latency_ms = active_decision.latency_ms
@@ -265,6 +258,15 @@ def _run_realtime_dashboard(
                 reward_since_decision += float(reward)
                 episode_reward += float(reward)
                 frame_index += 1
+                # Keep the displayed RAM snapshot aligned with the displayed frame.
+                snapshot = parser.parse(
+                    info,
+                    _unwrap_ram(env),
+                    previous_action=previous_action.value,
+                    previous_reward=previous_reward,
+                    previous_latency_ms=previous_latency_ms,
+                    previous_response_delay_frames=previous_response_delay_frames,
+                )
 
             command = dashboard.draw(
                 frame,
@@ -305,6 +307,7 @@ def _run_realtime_dashboard(
                     pending.cancel()
                 frame, info = env.reset()
                 parser.reset()
+                snapshot = parser.parse(info, _unwrap_ram(env), previous_response_delay_frames=0)
                 active_decision = None
                 pending = None
                 pending_snapshot = None
@@ -337,18 +340,20 @@ def run_episode(
     display: str = "dashboard",
     screenshot_path: Path | None = None,
     safety_config: SafetyConfig | None = None,
+    show_trajectories: bool = False,
+    game_width: int = 1440,
+    game_height: int = 810,
 ) -> Path:
     if frames_per_decision < 1:
         raise ValueError("frames_per_decision must be at least 1")
     if max_decisions < 1:
         raise ValueError("max_decisions must be at least 1")
+    if game_width < 1 or game_height < 1:
+        raise ValueError("game dimensions must be positive")
 
     if display not in {"dashboard", "game", "none"}:
         raise ValueError("display must be dashboard, game, or none")
-    render_mode = "human" if display == "game" else "rgb_array"
-    env = create_mario_env(env_id, render_mode=render_mode)
     guard = SafetyGuard(safety_config)
-    dashboard = LiveDashboard(safety_mode=guard.config.mode) if display == "dashboard" else None
     parser = MarioStateParser(
         goal=f"Reach the flag in {env_id} without dying.",
         decision_horizon_frames=frames_per_decision,
@@ -357,9 +362,17 @@ def run_episode(
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     log_path = artifacts_dir / f"run-{timestamp}.jsonl"
 
-    frame, info = env.reset(seed=seed)
-
+    env = create_mario_env(env_id, render_mode="rgb_array")
+    dashboard = None
+    game_window = None
     try:
+        if display == "dashboard":
+            dashboard = LiveDashboard(
+                safety_mode=guard.config.mode, show_trajectories=show_trajectories
+            )
+        elif display == "game":
+            game_window = GameWindow(width=game_width, height=game_height)
+        frame, info = env.reset(seed=seed)
         with log_path.open("w", encoding="utf-8") as log:
             if dashboard:
                 _run_realtime_dashboard(
@@ -385,8 +398,9 @@ def run_episode(
             frame_index = 0
             decisions = 0
             terminated = truncated = False
+            quit_requested = game_window is not None and not game_window.draw(frame)
             for decision_index in range(max_decisions):
-                if snapshot.dead or snapshot.clear:
+                if snapshot.dead or snapshot.clear or quit_requested:
                     break
 
                 request_snapshot = snapshot
@@ -407,8 +421,6 @@ def run_episode(
                     last_override = override
                     action = _controller_action(applied, snapshot, previous_action)
                     frame, reward, terminated, truncated, info = env.step(ACTION_TO_INDEX[action])
-                    if display == "game":
-                        env.render()
                     previous_action = action
                     frame_index += 1
                     total_reward += float(reward)
@@ -420,7 +432,9 @@ def run_episode(
                         previous_latency_ms=decision.latency_ms,
                         previous_response_delay_frames=0,
                     )
-                    if terminated or truncated:
+                    if game_window is not None:
+                        quit_requested = not game_window.draw(frame)
+                    if terminated or truncated or quit_requested:
                         break
 
                 _record_decision(
@@ -443,7 +457,7 @@ def run_episode(
                     )
                 )
 
-                if terminated or truncated:
+                if terminated or truncated or quit_requested:
                     break
             _record_summary(
                 log,
@@ -457,6 +471,8 @@ def run_episode(
     finally:
         if dashboard:
             dashboard.close()
+        if game_window:
+            game_window.close()
         env.close()
         close = getattr(policy, "close", None)
         if callable(close):
