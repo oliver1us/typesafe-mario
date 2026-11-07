@@ -18,10 +18,16 @@ NES emulator -> RAM parser -> structured JSON -> policy -> optional guard -> con
 
 ## Quick start: Docker, no API key
 
-Requires Docker Engine and a recent Docker Compose v2 supporting optional
-`env_file` entries. No host Python installation is needed.
+Requires a BuildKit-enabled Docker Engine and a recent Docker Compose v2
+supporting optional `env_file` entries. No host Python installation is needed.
+Run the commands as your normal non-root host user. For an existing, especially
+root-owned `artifacts` directory, follow the [one-time permissions migration](#artifact-permissions-and-upgrading)
+before starting a container.
 
 ```bash
+# Match the image user to the host owner of the writable output directory (Linux).
+mkdir -p artifacts
+export MARIO_UID="$(id -u)" MARIO_GID="$(id -g)"
 docker compose build mario
 docker compose run --rm --service-ports mario --policy heuristic --safety-mode off
 
@@ -30,7 +36,7 @@ docker compose run --rm --service-ports mario --policy heuristic --safety-mode o
 docker compose run --rm --service-ports mario --policy heuristic --trajectories --safety-mode off
 ```
 
-Open **http://localhost:6081/vnc.html**, click **Connect**, and enter the default
+Open **http://localhost:6080/vnc.html**, click **Connect**, and enter the default
 VNC password **`mario`**. Press **R** or click **Restart** to reset an episode;
 press **F** to show/hide approximate action trajectories, and **Esc** or **Q** to
 quit. **F** works even without `--trajectories`; its visibility setting survives
@@ -38,15 +44,27 @@ episode restarts. The dashboard stays open after an episode ends. Stop an attach
 container with **Ctrl+C**. Policy, safety settings, and display mode still require
 a new command/container.
 
-Compose forwards host **6081** to noVNC's internal **6080**. If occupied, prefix
-the command with `NOVNC_PORT=6082` and open port 6082 instead. Do not start two
-containers on the same published port. Rebuild after source/entrypoint changes:
-`docker compose run` by itself reuses the existing image.
+Compose defaults to **127.0.0.1:6080**, forwarding to noVNC's internal **6080**.
+An existing ignored `.env` can override the host port and binding; use its
+configured port in the browser URL. If occupied, prefix the command with
+`NOVNC_PORT=6082` and open port 6082 instead. Do not start two containers on the
+same published port. Rebuild after source/entrypoint changes: `docker compose run`
+by itself reuses the existing image.
 
-**Security:** the default VNC password is public, and noVNC has no TLS. Compose
-publishes on all host interfaces by default. Use only on a trusted local machine
-or network; restrict the host binding/firewall or use an authenticated TLS proxy
-before remote access. `VNC_PASSWORD` changes the password, not transport security.
+**Security:** Compose publishes on **127.0.0.1 only** by default. The VNC password
+is still public and noVNC has no TLS. Explicit `NOVNC_BIND_ADDRESS=0.0.0.0` exposes
+the port to other machines; it does not secure the connection. Prefer an SSH
+tunnel for remote access, keeping the remote service bound to loopback:
+
+```bash
+# Run on your client; assumes the remote host uses the default noVNC port.
+ssh -N -L 6080:127.0.0.1:6080 user@host
+```
+
+Then open **http://localhost:6080/vnc.html** on the client. An authenticated TLS
+proxy is another option. `VNC_PASSWORD` changes the password, not transport
+security. Keep machine-specific port/LAN overrides in your ignored `.env`, not
+the committed defaults.
 
 ## Local installation and commands
 
@@ -253,6 +271,10 @@ Optional configuration: copy `.env.example` to `.env` **only if you do not alrea
 have one**, fill in your provider key locally, and keep it untracked. Compose
 loads `.env`; the local Python CLI does not. Shell variables override Compose's
 `.env` values. The build context excludes `.env`, artifacts, and common caches.
+The template opts into `SHOW_TRAJECTORIES=true`; without that setting, Compose
+and the CLI default to hidden paths. If you persist `MARIO_UID`/`MARIO_GID` in an
+existing `.env`, use your actual output-directory owner IDs, not necessarily the
+template's `1000` values. Rebuild after changing them.
 
 ```bash
 # Offline dashboard with the guard enabled.
@@ -316,8 +338,10 @@ These are entrypoint/Compose settings, not automatic local CLI configuration.
 | `SEED`, `ENV_ID` | `123`, `SuperMarioBros-1-1-v0` | Initial reset seed and level. |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1440`, `810` | Positive TigerVNC desktop dimensions and initial `game` window size; dashboard layout remains fixed. |
 | `VNC_PORT` | `5901` | Internal loopback-only TigerVNC port. |
-| `NOVNC_PORT` | Compose host: `6081`; standalone container: `6080` | Compose fixes internal noVNC to `6080`. In `docker run`, this variable instead sets the internal listener. |
-| `VNC_PASSWORD` | `mario` | VNC password; local/trusted access only. |
+| `NOVNC_PORT` | `6080` | Compose host port; internal noVNC stays `6080`. In `docker run`, this variable instead sets the internal listener. |
+| `NOVNC_BIND_ADDRESS` | `127.0.0.1` | Compose host binding only. Explicit `0.0.0.0` allows LAN exposure; no TLS is added. Standalone Docker uses `-p` instead. |
+| `MARIO_UID`, `MARIO_GID` | `1000`, `1000` | **Build arguments**, passed by Compose from shell/`.env`. Set the image's non-root `mario` user/group; rebuild to change them. |
+| `VNC_PASSWORD` | `mario` | Script default, not baked into image environment or printed at startup. Classic VNC authentication, no TLS; local/trusted access only. |
 
 For example, `SHOW_TRAJECTORIES=true POLICY=heuristic docker compose up` starts an
 offline dashboard with paths, unless `GAME_DISPLAY` selects another mode. Append
@@ -327,49 +351,107 @@ window dimensions but does **not** resize the TigerVNC desktop; use
 `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` when changing both.
 
 Compose binds **`./artifacts:/app/artifacts`**, so logs/PNGs survive container
-removal. A `--artifacts-dir` outside that mount will not persist automatically.
+removal. A `--artifacts-dir` outside that mount needs another writable mount;
+the Compose root filesystem is read-only, and `/tmp` is ephemeral. Keep screenshots
+under `/app/artifacts` too.
 For a compatible host-side System One server, Compose supplies the
 `host.docker.internal` host-gateway mapping; the host service must be reachable
 from the container, not bound exclusively to host loopback.
 
-### Standalone `docker run`
+### Artifact permissions and upgrading
 
-Build a named image and create the host artifacts directory. The following
-examples keep the image's internal port at 6080 and publish host 6081 only on
-loopback; the same browser URL/password applies.
+The image now runs as **`mario` (UID/GID 1000 by default)** instead of root. Bind
+mounts retain host ownership; the image's `/app/artifacts` ownership cannot fix
+the mounted directory. Existing logs are not deleted or automatically chowned.
+For example, a root-owned `0:0` directory with mode `755` is not writable by a
+host-matched `1001:1001` container user.
+
+On Linux, inspect ownership, then deliberately migrate **only the artifacts
+directory** if it should belong to your current account. Do not run this against
+an unrelated output directory or while another container is writing there:
 
 ```bash
-docker build -t typesafe-mario:local .
+id -u; id -g
 mkdir -p artifacts
+ls -ldn artifacts
+
+# One-time ownership adjustment, only after reviewing the directory above.
+# Preserves the files; do not use chmod 777 or delete logs to work around this.
+sudo chown -R "$(id -u):$(id -g)" ./artifacts
+export MARIO_UID="$(id -u)" MARIO_GID="$(id -g)"
+docker compose build mario
+```
+
+Keep those build settings in your shell or update the corresponding entries in
+your existing `.env` for future rebuilds. Alternatively, keep UID/GID 1000 and
+deliberately grant that account write access to the output directory. Docker
+Desktop bind permissions can differ; verify writability rather than assuming
+numeric IDs alone are sufficient.
+
+`entrypoint.sh` checks the final `--artifacts-dir PATH` or `--artifacts-dir=PATH`
+before starting graphics or the policy. If creation/write access fails, startup
+exits with the actual container UID/GID and a permissions hint; it never changes
+ownership. `--help` bypasses the artifacts/graphics checks. Custom output mounts
+need the same permission review. See [container maintenance](docs/container-maintenance.md)
+for the image design, offline validation, and security scanning commands.
+
+Compose also enables an init process, a read-only root filesystem, drops all
+Linux capabilities, and sets `no-new-privileges`. Its writable `/tmp` tmpfs uses
+`rw,nosuid,nodev,mode=1777`; `HOME=/tmp/mario` keeps VNC credentials and caches
+ephemeral. Only the artifacts bind is persistent writable application storage.
+TigerVNC stays on container loopback and X11 TCP listening is disabled. These
+restrictions reduce exposure but are not a substitute for network security.
+
+### Standalone `docker run`
+
+Create the host artifacts directory and build a named image with matching IDs
+(Linux, normal non-root host account). Existing directories still need the
+[permissions migration](#artifact-permissions-and-upgrading). The following
+examples keep the image's internal port at 6080 and publish host 6080 only on
+loopback; the same browser URL/password applies. The image's non-root user is
+automatic, but Compose's runtime restrictions are **not** image defaults.
+
+```bash
+mkdir -p artifacts
+docker build --build-arg MARIO_UID="$(id -u)" --build-arg MARIO_GID="$(id -g)" \
+  -t typesafe-mario:local .
 
 # Offline dashboard; turn the guard off by replacing conservative with off.
-docker run --rm -it -p 127.0.0.1:6081:6080 \
+docker run --rm --init -it -p 127.0.0.1:6080:6080 \
   -v "$PWD/artifacts:/app/artifacts" typesafe-mario:local \
   --policy heuristic --display dashboard --safety-mode conservative
 
 # AI controller with tuning and a different SMB1 level.
 export OPENROUTER_API_KEY="your-openrouter-key"
-docker run --rm -it -p 127.0.0.1:6081:6080 -e OPENROUTER_API_KEY -e BACKEND=openrouter \
+docker run --rm --init -it -p 127.0.0.1:6080:6080 -e OPENROUTER_API_KEY -e BACKEND=openrouter \
   -v "$PWD/artifacts:/app/artifacts" typesafe-mario:local \
   --policy typesafe --display dashboard --env SuperMarioBros-1-2-v0 \
   --safety-mode conservative --min-confidence 0.8 --danger-threshold 0.5 --safety-margin-frames 6
 
 # Large plain game window via noVNC; guard disabled, no API calls.
-docker run --rm -it -p 127.0.0.1:6081:6080 \
+docker run --rm --init -it -p 127.0.0.1:6080:6080 \
   -v "$PWD/artifacts:/app/artifacts" typesafe-mario:local \
   --policy heuristic --display game --safety-mode off
 
-# No windows or published port; AI policy can replace heuristic with a provider key.
-docker run --rm -v "$PWD/artifacts:/app/artifacts" typesafe-mario:local \
+# Offline headless run with the same runtime restrictions as Compose.
+docker run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+  -v "$PWD/artifacts:/app/artifacts" typesafe-mario:local \
   --policy heuristic --display none --safety-mode conservative --seed 123 --max-decisions 100
 ```
+
+`--init` reaps graphical helper processes. Add the headless example's
+`--read-only`, `--tmpfs`, `--cap-drop`, and `--security-opt` flags to any standalone
+graphical command for Compose-equivalent restrictions; they are optional with
+`docker run`. A read-only root needs writable `/tmp` and artifacts mounts.
 
 For direct access use `-e TYPESAFE_API_KEY -e BACKEND=direct`; `--model` and
 `--base-url` work as above. For a compatible host-local endpoint on Linux, add
 `--add-host host.docker.internal:host-gateway -e BACKEND=ollama
 -e OLLAMA_HOST=http://host.docker.internal:11434`. Do not blindly use the Compose
-`.env` as a standalone `--env-file`: its `NOVNC_PORT=6081` denotes the **host**
-port in Compose but would change the **internal** listener in `docker run`.
+`.env` as a standalone `--env-file`: a `NOVNC_PORT` override denotes the **host**
+port in Compose but changes the **internal** listener in `docker run`. Likewise,
+`NOVNC_BIND_ADDRESS` does not replace an explicit standalone `-p` host binding.
 
 ## Levels and game files
 
@@ -383,8 +465,9 @@ ENV_ID=SuperMarioBros-1-3-v0 POLICY=heuristic docker compose up
 ```
 
 Only **`v0`** is registered in the currently tested package; do not assume the
-older `v1`/`v2`/`v3` variants exist. The dependency range is not a lockfile, so
-inspect the actual installed registry when upgrading:
+older `v1`/`v2`/`v3` variants exist. Local dependency ranges are not a lockfile;
+Docker uses `requirements-docker.txt` pins. Inspect the actual installed registry
+when upgrading either:
 
 ```bash
 python -c 'import gym_super_mario_bros, gymnasium as gym; print("\n".join(sorted(x for x in gym.registry if x.startswith("SuperMarioBros"))))'
@@ -483,8 +566,8 @@ PY
 The synchronous upper frame budget is `max_decisions × frames_per_decision`
 (2000 × 8 here), with earlier termination possible. Real-time API latency makes
 dashboard budgets differ. Repeat across seeds/levels before drawing conclusions;
-for `typesafe`, both comparison runs can incur API costs. A final-image headless
-sanity check with these settings produced:
+for `typesafe`, both comparison runs can incur API costs. A previous image's
+headless sanity check with these settings produced:
 
 | Safety | Best progress | Decisions | Interventions | Outcome |
 |---|---|---|---|---|
@@ -502,16 +585,21 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 python -m pytest -q
 ruff format --check src tests
 ruff check src tests
-bash -n docker-entrypoint.sh
+bash -n entrypoint.sh
 docker compose config --quiet
 ```
+
+See [container maintenance](docs/container-maintenance.md) for isolated image
+checks, dependency refreshes, SBOM generation, and vulnerability scanning. These
+are local workflows, not an automatically configured CI pipeline.
 
 | Symptom | Check |
 |---|---|
 | HTTP 401/403 | The credential for the explicitly selected backend; `auto` prefers the direct key when both exist. |
 | HTTP 404 | Full System One endpoint and compatible model; this is not a chat-completions client. OpenRouter defaults to `typesafe/jev-1.13`. |
 | Local-server connection refused | Server reachability and explicit `/v1/systemone` support. In Docker, `localhost` is the container, not the host. |
-| Browser cannot connect | Correct host port (Compose default 6081), container still running, and `GAME_DISPLAY`/`--display` not `none`. |
+| `Artifacts directory is not writable` | Review the reported UID/GID, host bind ownership, and [one-time migration](#artifact-permissions-and-upgrading). Match build IDs and rebuild; do not use `chmod 777`. |
+| Browser cannot connect | Correct host port (Compose default 6080; shell/`.env` can override it), loopback binding or protected remote tunnel, container still running, and `GAME_DISPLAY`/`--display` not `none`. |
 | noVNC black screen | Allow startup time; inspect `docker compose logs mario` or attached run output for TigerVNC/application failures. |
 | Plain game looks tiny | Rebuild after this viewer change. `--display game` now defaults to a resizable 1440×810 pygame window, not the native 256×240 viewer. Set `--game-width`/`--game-height`; in Docker, `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` also set the desktop. |
 | Bars around the game or unchanged dashboard size | Aspect-preserving scaling intentionally leaves bars. Game-size flags do not change the fixed dashboard layout or the VNC desktop. |

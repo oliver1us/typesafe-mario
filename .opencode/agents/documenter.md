@@ -55,8 +55,9 @@ cosmetic edits. You run when invoked; do not claim to monitor changes in the bac
 - Existing `docs/` pages and changelogs, when present: focused guides, architecture,
   troubleshooting, and release notes following the project's existing conventions.
 - `pyproject.toml`, `src/typesafe_mario/`, tests, `.env.example`, `Dockerfile`,
-  `compose.yml`, and `docker-entrypoint.sh`: implementation evidence for requirements,
-  commands, backends, environment variables, ports, defaults, and runtime behavior.
+  `requirements-docker.txt`, `compose.yml`, and `entrypoint.sh`: implementation
+  evidence for requirements, commands, backends, environment variables, ports,
+  defaults, and runtime behavior.
   Read only the sources relevant to the change; verify values instead of hardcoding
   assumptions about them in your instructions.
 
