@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+.env.*
+artifacts
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.opencode
+tests
+docs
+*.nes
+*.rom

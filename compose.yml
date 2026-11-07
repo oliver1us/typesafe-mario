@@ -1,0 +1,41 @@
+services:
+  mario:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
+      - BACKEND=${BACKEND:-openrouter}
+      - MODEL=${MODEL:-}
+      - BASE_URL=${BASE_URL:-}
+      - POLICY=${POLICY:-typesafe}
+      - GAME_DISPLAY=${GAME_DISPLAY:-dashboard}
+      - SAFETY_MODE=${SAFETY_MODE:-off}
+      - MIN_CONFIDENCE=${MIN_CONFIDENCE:-0.8}
+      - DANGER_THRESHOLD=${DANGER_THRESHOLD:-0.5}
+      - SAFETY_MARGIN_FRAMES=${SAFETY_MARGIN_FRAMES:-6}
+      - SEED=${SEED:-123}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - FRAMES_PER_DECISION=${FRAMES_PER_DECISION:-8}
+      - MAX_DECISIONS=${MAX_DECISIONS:-2000}
+      - ENV_ID=${ENV_ID:-SuperMarioBros-1-1-v0}
+      - DISPLAY_WIDTH=${DISPLAY_WIDTH:-1440}
+      - DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-810}
+      - VNC_PORT=${VNC_PORT:-5901}
+      # NOVNC_PORT selects the host port; noVNC always listens on 6080 inside.
+      - NOVNC_PORT=6080
+      - NOVNC_HOST_PORT=${NOVNC_PORT:-6081}
+      - VNC_PASSWORD=${VNC_PASSWORD:-mario}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./artifacts:/app/artifacts
+    ports:
+      - "${NOVNC_PORT:-6081}:6080"
+    # Mount a custom ROM only if you have a legally dumped copy.
+    # volumes:
+    #   - ./my-roms/super-mario-bros.nes:/usr/local/lib/python3.13/site-packages/gym_super_mario_bros/_roms/super-mario-bros.nes:ro
