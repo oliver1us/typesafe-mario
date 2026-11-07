@@ -17,10 +17,14 @@ class EntrypointTests(unittest.TestCase):
             executable = Path(directory) / "typesafe-mario"
             executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
             executable.chmod(0o755)
+            if not os.access(executable, os.X_OK):
+                self.skipTest("Entrypoint stubs require an executable test temporary directory")
             result = subprocess.run(
                 [
                     "bash",
-                    str(Path(__file__).resolve().parents[1] / "docker-entrypoint.sh"),
+                    str(Path(__file__).resolve().parents[1] / "entrypoint.sh"),
+                    "--artifacts-dir",
+                    str(Path(directory) / "artifacts"),
                     *arguments,
                 ],
                 env={"PATH": f"{directory}{os.pathsep}{os.environ['PATH']}", **environment},
@@ -80,6 +84,28 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual((args.game_width, args.game_height), (1280, 720))
         argv = self.run_entrypoint("--display=none", "--game-width=960", DISPLAY_WIDTH="1280")
         self.assertEqual(build_parser().parse_args(argv).game_width, 960)
+
+    def test_unwritable_artifacts_fail_before_starting_graphics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blocker = Path(directory) / "not-a-directory"
+            blocker.write_text("preserve this file")
+            with self.assertRaises(subprocess.CalledProcessError) as error:
+                self.run_entrypoint("--artifacts-dir", str(blocker), GAME_DISPLAY="dashboard")
+            self.assertEqual(error.exception.returncode, 2)
+            self.assertIn("Artifacts directory is not writable", error.exception.stderr)
+            self.assertIn("container UID", error.exception.stderr)
+            self.assertEqual(blocker.read_text(), "preserve this file")
+
+    def test_artifacts_equals_override_is_honored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "custom artifacts"
+            argv = self.run_entrypoint("--display=none", f"--artifacts-dir={path}")
+            self.assertEqual(build_parser().parse_args(argv).artifacts_dir, path)
+            self.assertTrue(path.is_dir())
+
+    def test_help_does_not_require_a_writable_artifacts_mount(self) -> None:
+        argv = self.run_entrypoint("--artifacts-dir=/proc/invalid-mario-output", "--help")
+        self.assertIn("--help", argv)
 
 
 if __name__ == "__main__":

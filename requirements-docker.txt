@@ -1,0 +1,13 @@
+# Runtime dependency lock for the Docker image (Python 3.13).
+# Local installation keeps the ranges in pyproject.toml. Refresh these pins together
+# with the base-image digest, pip check, tests, and offline graphical smoke checks.
+cloudpickle==3.1.2
+farama-notifications==0.0.6
+gym-super-mario-bros==9.1.0
+gymnasium==1.4.0
+nes-py==9.0.1
+numpy==2.5.4
+pygame==2.6.1
+pyglet==1.5.21
+tqdm==4.70.1
+typing-extensions==4.16.0

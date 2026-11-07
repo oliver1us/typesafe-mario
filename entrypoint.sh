@@ -29,13 +29,21 @@ args+=("$@")
 
 # Honor the final --display override, including --display=none, before starting X.
 display_mode="${GAME_DISPLAY:-dashboard}"
+artifacts_dir=/app/artifacts
 for ((i=0; i<${#args[@]}; i++)); do
     case "${args[i]}" in
         --display) display_mode="${args[i+1]:-}" ;;
         --display=*) display_mode="${args[i]#*=}" ;;
+        --artifacts-dir) artifacts_dir="${args[i+1]:-}" ;;
+        --artifacts-dir=*) artifacts_dir="${args[i]#*=}" ;;
         --help|-h) exec typesafe-mario "${args[@]}" ;;
     esac
 done
+if ! mkdir -p -- "$artifacts_dir" 2>/dev/null || [ ! -w "$artifacts_dir" ]; then
+    echo "Artifacts directory is not writable: $artifacts_dir" >&2
+    echo "Make the bind mount writable by container UID $(id -u):GID $(id -g); see README.md for migration steps." >&2
+    exit 2
+fi
 if [ "$display_mode" = none ]; then
     exec typesafe-mario "${args[@]}"
 fi
@@ -49,11 +57,16 @@ VNC_PASSWORD="${VNC_PASSWORD:-mario}"
 
 # TigerVNC supplies the X display itself; do not start Xvfb on the same display.
 rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
-mkdir -p ~/.vnc
+mkdir -m 1777 -p /tmp/.X11-unix
+mkdir -p "$HOME/.vnc"
+chmod 700 "$HOME/.vnc"
+saved_umask=$(umask)
+umask 077
 printf '%s' "$VNC_PASSWORD" | tigervncpasswd -f > ~/.vnc/passwd
 chmod 600 ~/.vnc/passwd
+umask "$saved_umask"
 Xtigervnc :1 -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -depth 24 \
-    -rfbport "$VNC_PORT" -PasswordFile ~/.vnc/passwd -localhost yes &
+    -rfbport "$VNC_PORT" -PasswordFile ~/.vnc/passwd -localhost yes -nolisten tcp &
 VNC_PID=$!
 
 # Fail clearly if the graphical service cannot start.
@@ -66,9 +79,17 @@ done
 /usr/share/novnc/utils/novnc_proxy \
     --vnc "localhost:$VNC_PORT" --listen "$NOVNC_PORT" --web /usr/share/novnc &
 NOVNC_PID=$!
-sleep 1
-kill -0 "$NOVNC_PID" 2>/dev/null || { echo "noVNC failed to start" >&2; exit 1; }
+novnc_ready=false
+for _ in {1..50}; do
+    kill -0 "$NOVNC_PID" 2>/dev/null || { echo "noVNC failed to start" >&2; exit 1; }
+    if python -c 'import sys, urllib.request; urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/vnc.html", timeout=0.2).close()' "$NOVNC_PORT" >/dev/null 2>&1; then
+        novnc_ready=true
+        break
+    fi
+    sleep 0.1
+done
+[ "$novnc_ready" = true ] || { echo "Timed out waiting for noVNC" >&2; exit 1; }
 
 echo "Open http://localhost:$NOVNC_HOST_PORT/vnc.html and click Connect"
-echo "VNC password: $VNC_PASSWORD (trusted local networks only; no TLS)"
+echo "VNC authentication is enabled (configure VNC_PASSWORD; trusted local access only, no TLS)."
 exec typesafe-mario "${args[@]}"
