@@ -3,6 +3,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        MARIO_UID: ${MARIO_UID:-1000}
+        MARIO_GID: ${MARIO_GID:-1000}
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
     env_file:
       - path: .env
         required: false
@@ -29,14 +40,16 @@ services:
       - VNC_PORT=${VNC_PORT:-5901}
       # NOVNC_PORT selects the host port; noVNC always listens on 6080 inside.
       - NOVNC_PORT=6080
-      - NOVNC_HOST_PORT=${NOVNC_PORT:-6081}
+      - NOVNC_HOST_PORT=${NOVNC_PORT:-6080}
       - VNC_PASSWORD=${VNC_PASSWORD:-mario}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./artifacts:/app/artifacts
+      - mario_artifacts:/app/artifacts
     ports:
-      - "${NOVNC_PORT:-6081}:6080"
+      - "${NOVNC_BIND_ADDRESS:-127.0.0.1}:${NOVNC_PORT:-6080}:6080"
     # Mount a custom ROM only if you have a legally dumped copy.
     # volumes:
     #   - ./my-roms/super-mario-bros.nes:/usr/local/lib/python3.13/site-packages/gym_super_mario_bros/_roms/super-mario-bros.nes:ro
+volumes:
+  mario_artifacts:

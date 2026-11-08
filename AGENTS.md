@@ -19,11 +19,13 @@ src/typesafe_mario/
   trajectories.py  # view-only coarse macro estimates; no emulator rollouts/provider calls
   display.py       # shared RGB scaling + large resizable synchronous game viewer
   actions.py       # controller macros
-tests/             # state, backend, CLI, display/paths, dashboard, safety, runner, entrypoint
-Dockerfile         # Python 3.13 + emulator + TigerVNC + noVNC
-compose.yml        # service config, host port 6081 -> container 6080, artifacts bind mount
-docker-entrypoint.sh
+tests/             # state, backend, CLI, display/paths, dashboard, safety, runner, container
+Dockerfile         # Python 3.13 builder/runtime stages + emulator + TigerVNC + noVNC
+requirements-docker.txt # pinned Docker runtime dependencies; local extras retain ranges
+compose.yml        # service config, 127.0.0.1:6080 -> container 6080, artifacts bind mount
+entrypoint.sh
 .env.example       # safe configuration template; never commit the real .env
+docs/container-maintenance.md # image design, offline checks, SBOM and scanning
 .opencode/agents/documenter.md
 ```
 
@@ -45,7 +47,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 python -m pytest -q
 ruff format --check src tests
 ruff check src tests
-bash -n docker-entrypoint.sh
+bash -n entrypoint.sh
 docker compose config --quiet
 ```
 
@@ -134,6 +136,8 @@ as live-provider verification.
 ## Docker/noVNC workflows
 
 ```bash
+mkdir -p artifacts
+export MARIO_UID="$(id -u)" MARIO_GID="$(id -g)"
 docker compose build mario
 
 # Free offline dashboard, guard enabled:
@@ -150,11 +154,34 @@ export OPENROUTER_API_KEY="your-openrouter-key"
 BACKEND=openrouter POLICY=typesafe SAFETY_MODE=conservative docker compose up --build
 ```
 
-Open **http://localhost:6081/vnc.html**, connect, and use default VNC password
+Open **http://localhost:6080/vnc.html**, connect, and use default VNC password
 `mario`. TigerVNC is the X server; do **not** add Xvfb on the same display.
 `tigervnc-tools` supplies `tigervncpasswd`. Defaults are local/trusted use only:
-no TLS, public default password, Compose publishes on all host interfaces.
+no TLS and a public default password. Compose publishes on **127.0.0.1** by default;
+`NOVNC_BIND_ADDRESS=0.0.0.0` deliberately exposes the port to other machines,
+without adding transport security. Prefer an SSH tunnel for remote access (see
+README). The script does not print the VNC password. Repository defaults and
+`.env.example` use loopback and host port **6080**; keep machine-specific host
+ports/LAN exposure only in the ignored `.env`, not committed defaults or examples.
+An existing `.env` can override the browser port/binding; do not read it during
+routine documentation validation.
 
+- The image runs as `mario`, UID/GID 1000 by default. `MARIO_UID`/`MARIO_GID`
+  are build arguments exposed through Compose; match the intended artifacts owner
+  and rebuild after changes. Run host-ID commands above as a normal non-root user.
+  Existing root-owned artifacts require a deliberate one-time ownership/permission
+  migration; see README. Never chown user artifacts automatically, delete old logs,
+  use `chmod 777`, or overwrite a real `.env` during validation.
+- `entrypoint.sh` preflights the last `--artifacts-dir PATH`/`--artifacts-dir=PATH`
+  before graphics/policy startup, reports actual UID/GID on failure, and makes no
+  ownership changes. `--help` skips artifacts/graphics checks.
+- Compose uses `init: true`, `read_only: true`, `cap_drop: [ALL]`, and
+  `no-new-privileges:true`; `/tmp` is a `rw,nosuid,nodev,mode=1777` tmpfs.
+  `HOME=/tmp/mario` holds ephemeral VNC credentials/caches, and X TCP is disabled.
+  The artifacts bind stays writable/persistent. Standalone `docker run` inherits
+  the non-root image user, not Compose's restrictions; add the corresponding
+  flags explicitly (README examples). Custom output/screenshot paths need an
+  appropriate writable mount when the root filesystem is read-only.
 - `NOVNC_PORT=6082` selects a different **host** port in Compose; internal noVNC
   remains 6080. In standalone `docker run`, `NOVNC_PORT` instead sets the internal
   listener. See README before sharing a Compose `.env` with standalone Docker.
@@ -164,6 +191,8 @@ no TLS, public default password, Compose publishes on all host interfaces.
 - `SHOW_TRAJECTORIES=false` controls initial dashboard visibility; accepted values
   are lowercase `true/1/yes/on` and `false/0/no/off`. Invalid values fail startup;
   trailing `--trajectories`/`--no-trajectories` override valid environment defaults.
+  The existing `.env.example` intentionally opts in with `SHOW_TRAJECTORIES=true`;
+  preserve it rather than confusing that template choice with CLI/Compose defaults.
 - `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` default to 1440/810 and set both the TigerVNC
   desktop and initial plain game window size, not the fixed dashboard layout.
   Trailing `--game-width`/`--game-height` override only the window, not the desktop.
@@ -176,6 +205,23 @@ no TLS, public default password, Compose publishes on all host interfaces.
   use separate test containers/ports when necessary.
 - Compose maps `host.docker.internal` to the Linux host gateway for compatible
   local servers. Host-only loopback listeners may still be unreachable.
+
+### Container maintenance rules
+
+- Keep compilers/development headers in the builder only. Runtime installs normal
+  wheels via a BuildKit wheelhouse mount, not editable source. Preserve the
+  `/usr/local/lib/python3.13/site-packages/` ROM override path unless documenting
+  an intentional migration. Keep Debian's graphical stack, fonts/GLU, Node, and
+  distro Python this pass; do not assume they are unused or switch to Alpine.
+- Refresh the Python multi-platform base digest and Docker runtime pins together
+  for security updates; local `pyproject.toml` ranges are unchanged. APT packages
+  and isolated build dependencies are not fully locked: do not call this a fully
+  hermetic build or claim a clean scan without running one.
+- Follow [container maintenance](docs/container-maintenance.md) for isolated
+  offline smoke tests, image measurements, SBOM/scanning, and version refreshes.
+  Report measured image bytes separately from APT simulation estimates and build
+  cache usage. Never present pending checks as passed, security hardening as
+  rootless-Docker verification, or local/mocked checks as provider validation.
 
 ## Environment and ROM scope
 
